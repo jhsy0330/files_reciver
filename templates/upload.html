@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文件上传系统 - 上传文件</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            width: 600px;
+            max-width: 100%;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+        }
+        input[type="file"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        button {
+            width: 100%;
+            padding: 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-bottom: 15px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .flash {
+            padding: 10px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .success {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .error {
+            background-color: #f44336;
+            color: white;
+        }
+        .info {
+            background-color: #2196F3;
+            color: white;
+        }
+        /* 进度条样式 */
+        .progress-container {
+            width: 100%;
+            background-color: #f1f1f1;
+            border-radius: 4px;
+            overflow: hidden;
+            display: none;
+            margin-bottom: 15px;
+        }
+        .progress-bar {
+            width: 0%;
+            height: 20px;
+            background-color: #4CAF50;
+            text-align: center;
+            line-height: 20px;
+            color: white;
+            transition: width 0.3s ease;
+        }
+        .progress-text {
+            text-align: center;
+            color: #666;
+            margin-top: 5px;
+            font-size: 14px;
+        }
+        /* 已上传文件列表样式 */
+        .files-section {
+            margin-top: 30px;
+        }
+        .files-section h2 {
+            font-size: 18px;
+            color: #333;
+            margin-bottom: 15px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 5px;
+        }
+        .file-list {
+            list-style-type: none;
+            padding: 0;
+            margin: 0;
+        }
+        .file-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .file-item:last-child {
+            border-bottom: none;
+        }
+        .file-info {
+            flex-grow: 1;
+        }
+        .file-name {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 3px;
+        }
+        .file-meta {
+            font-size: 12px;
+            color: #666;
+        }
+        .no-files {
+            text-align: center;
+            color: #999;
+            padding: 20px;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>上传文件</h1>
+        {% with messages = get_flashed_messages() %} 
+          {% if messages %} 
+            {% for message in messages %} 
+              {% if '成功' in message %} 
+                <div class="flash success">{{ message }}</div> 
+              {% elif '错误' in message or '没有' in message or '不允许' in message or '请先' in message %} 
+                <div class="flash error">{{ message }}</div> 
+              {% else %} 
+                <div class="flash info">{{ message }}</div> 
+              {% endif %} 
+            {% endfor %} 
+          {% endif %} 
+        {% endwith %} 
+        <form id="uploadForm" method="post" enctype="multipart/form-data">
+            <div class="form-group">
+                <label for="file">选择文件（可多选）：</label>
+                <input type="file" id="file" name="file" required multiple> <!-- 添加multiple属性支持多文件选择 -->
+            </div>
+            <!-- 进度条 -->
+            <div class="progress-container" id="progressContainer">
+                <div class="progress-bar" id="progressBar">0%</div>
+            </div>
+            <div class="progress-text" id="progressText"></div>
+            <button type="submit" id="uploadBtn">上传</button>
+        </form>
+        
+        <!-- 已上传文件列表 -->
+        <div class="files-section">
+            <h2>已上传文件</h2>
+            {% if uploaded_files %} 
+                <ul class="file-list">
+                    {% for file in uploaded_files %} 
+                        <li class="file-item">
+                            <div class="file-info">
+                                <div class="file-name">{{ file.name }}</div>
+                                <div class="file-meta">
+                                    大小：{{ "%.2f"|format(file.size / 1024 / 1024) }} MB • 
+                                    上传时间：{{ file.time|datetimeformat }}
+                                </div>
+                            </div>
+                        </li> 
+                    {% endfor %} 
+                </ul>
+            {% else %} 
+                <div class="no-files">暂无已上传的文件</div>
+            {% endif %} 
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', function(e) {
+            e.preventDefault(); // 阻止表单默认提交
+            
+            const fileInput = document.getElementById('file');
+            const files = Array.from(fileInput.files);
+            const uploadBtn = document.getElementById('uploadBtn');
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            
+            if (files.length === 0) {
+                alert('请选择至少一个文件');
+                return;
+            }
+            
+            // 显示进度条
+            progressContainer.style.display = 'block';
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = '上传中...';
+            
+            // 创建FormData对象
+            const formData = new FormData();
+            files.forEach(file => {
+                formData.append('file', file);
+            });
+            
+            // 创建XMLHttpRequest对象
+            const xhr = new XMLHttpRequest();
+            
+            // 监听上传进度
+            xhr.upload.addEventListener('progress', function(e) {
+                if (e.lengthComputable) {
+                    const percentComplete = (e.loaded / e.total) * 100;
+                    progressBar.style.width = percentComplete + '%';
+                    progressBar.textContent = Math.round(percentComplete) + '%';
+                    progressText.textContent = `已上传 ${formatBytes(e.loaded)} / ${formatBytes(e.total)}`;
+                }
+            });
+            
+            // 上传完成处理
+            xhr.addEventListener('load', function() {
+                if (xhr.status === 200) {
+                    // 重定向到上传页面，显示成功消息
+                    window.location.reload();
+                } else {
+                    alert('上传失败，请重试');
+                    resetForm();
+                }
+            });
+            
+            // 上传错误处理
+            xhr.addEventListener('error', function() {
+                alert('上传过程中发生错误');
+                resetForm();
+            });
+            
+            // 发送请求
+            xhr.open('POST', '/upload');
+            xhr.send(formData);
+            
+            // 重置表单函数
+            function resetForm() {
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = '上传';
+                progressContainer.style.display = 'none';
+                progressBar.style.width = '0%';
+                progressBar.textContent = '0%';
+                progressText.textContent = '';
+            }
+        });
+        
+        // 格式化字节数
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        
+        // 格式化时间戳为可读时间
+        function formatDate(timestamp) {
+            const date = new Date(timestamp * 1000);
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            const seconds = String(date.getSeconds()).padStart(2, '0');
+            return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+        }
+    </script>
+</body>
+</html>
