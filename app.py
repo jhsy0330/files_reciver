@@ -1,22 +1,36 @@
 from flask import Flask, request, redirect, url_for, render_template, flash, session
 import os
+import json
+import secrets
 from werkzeug.utils import secure_filename
 from datetime import datetime
 
+# 读取配置文件
+with open('config.json', 'r') as f:
+    config = json.load(f)
+
+# 检查并生成SECRET_KEY
+if not config.get('SECRET_KEY') or config['SECRET_KEY'] == 'your-secret-key-here':
+    config['SECRET_KEY'] = secrets.token_hex(16)
+    # 保存更新后的配置
+    with open('config.json', 'w') as f:
+        json.dump(config, f, indent=4)
+    print(f"生成了新的SECRET_KEY: {config['SECRET_KEY']}")
+
 app = Flask(__name__)
 
-# 配置
-app.secret_key = 'your-secret-key-here'  # 用于session，确保生产环境使用强密钥
-PASSWORD = '123456'  # 可修改密码
-UPLOAD_FOLDER = 'uploads'  # 上传文件目录
-ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'rar', 'tar', 'gz', '7z'}
+# 设置Flask配置
+app.config['SECRET_KEY'] = config['SECRET_KEY']
+app.config['UPLOAD_FOLDER'] = config['UPLOAD_FOLDER']
+app.config['MAX_CONTENT_LENGTH'] = config['MAX_CONTENT_LENGTH']
+
+# 设置其他配置变量
+PASSWORD = config['PASSWORD']
+ALLOWED_EXTENSIONS = set(config['ALLOWED_EXTENSIONS'])
 
 # 确保上传目录存在
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
-
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024 * 1024  # 10GB上传限制
+if not os.path.exists(app.config['UPLOAD_FOLDER']):
+    os.makedirs(app.config['UPLOAD_FOLDER'])
 
 # 检查文件类型是否允许
 def allowed_file(filename):
