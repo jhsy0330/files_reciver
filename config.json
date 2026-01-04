@@ -24,5 +24,7 @@
         "gz",
         "7z"
     ],
-    "MAX_CONTENT_LENGTH": 10737418240
+    "MAX_CONTENT_LENGTH": 10737418240,
+    "CHUNK_SIZE": 5242880,
+    "COMPRESSION_LEVEL": 6
 }

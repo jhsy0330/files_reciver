@@ -1,9 +1,15 @@
-from flask import Flask, request, redirect, url_for, render_template, flash, session
+from flask import Flask, render_template, request, jsonify, send_from_directory, session, redirect, flash
 import os
+import datetime
+import hashlib
+import gzip
+import shutil
+from pathlib import Path
 import json
 import secrets
 from werkzeug.utils import secure_filename
 from datetime import datetime, date
+import hashlib
 
 # 读取配置文件
 with open('config.json', 'r') as f:
@@ -43,6 +49,11 @@ else:
 if not os.path.exists(ACTUAL_UPLOAD_FOLDER):
     os.makedirs(ACTUAL_UPLOAD_FOLDER)
 
+# 创建临时上传目录（用于断点续传）
+TEMP_UPLOAD_FOLDER = os.path.join(ACTUAL_UPLOAD_FOLDER, '.temp')
+if not os.path.exists(TEMP_UPLOAD_FOLDER):
+    os.makedirs(TEMP_UPLOAD_FOLDER)
+
 # 检查文件类型是否允许
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -66,12 +77,154 @@ def format_size(size_bytes):
         size_bytes /= 1024.0
     return f"{size_bytes:.2f} PB"
 
+# 生成文件唯一标识（用于断点续传）
+def generate_file_id(filename, filesize):
+    """根据文件名和大小生成唯一标识"""
+    content = f"{filename}_{filesize}"
+    return hashlib.md5(content.encode()).hexdigest()
+
+# 检查文件上传状态
+@app.route('/upload/check', methods=['POST'])
+def check_upload_status():
+    """检查文件上传状态，返回已上传的字节数"""
+    if 'authenticated' not in session:
+        return jsonify({'error': '未授权'}), 401
+    
+    file_id = request.form.get('file_id')
+    if not file_id:
+        return jsonify({'error': '缺少file_id参数'}), 400
+    
+    temp_file_path = os.path.join(TEMP_UPLOAD_FOLDER, file_id)
+    if os.path.exists(temp_file_path):
+        uploaded_size = os.path.getsize(temp_file_path)
+        return jsonify({'uploaded_size': uploaded_size})
+    else:
+        return jsonify({'uploaded_size': 0})
+
+# 上传文件块
+@app.route('/upload/chunk', methods=['POST'])
+def upload_chunk():
+    """上传文件块，支持断点续传和压缩"""
+    try:
+        file_id = request.form.get('file_id')
+        chunk_index = int(request.form.get('chunk_index', 0))
+        total_chunks = int(request.form.get('total_chunks', 1))
+        filename = request.form.get('filename', 'unknown')
+        filesize = int(request.form.get('filesize', 0))
+        is_compressed = request.form.get('is_compressed', 'false').lower() == 'true'
+        
+        if not file_id or 'chunk' not in request.files:
+            return jsonify({'success': False, 'message': '缺少必要参数'}), 400
+        
+        chunk = request.files['chunk']
+        
+        # 创建临时文件目录
+        temp_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'temp')
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        # 创建文件专属目录
+        file_dir = os.path.join(temp_dir, file_id)
+        os.makedirs(file_dir, exist_ok=True)
+        
+        # 保存文件块
+        chunk_path = os.path.join(file_dir, f'chunk_{chunk_index}')
+        chunk.save(chunk_path)
+        
+        # 更新上传状态
+        status_file = os.path.join(file_dir, 'status.json')
+        status = {
+            'file_id': file_id,
+            'filename': filename,
+            'filesize': filesize,
+            'total_chunks': total_chunks,
+            'uploaded_chunks': chunk_index + 1,
+            'is_compressed': is_compressed
+        }
+        
+        # 计算已上传大小
+        uploaded_size = 0
+        for i in range(chunk_index + 1):
+            chunk_file = os.path.join(file_dir, f'chunk_{i}')
+            if os.path.exists(chunk_file):
+                uploaded_size += os.path.getsize(chunk_file)
+        
+        status['uploaded_size'] = uploaded_size
+        
+        with open(status_file, 'w') as f:
+            json.dump(status, f)
+        
+        # 检查是否所有块都已上传完成
+        if chunk_index + 1 >= total_chunks:
+            # 合并文件块
+            final_filename = filename
+            if is_compressed:
+                final_filename = filename + '.gz'
+            
+            final_path = os.path.join(temp_dir, final_filename)
+            
+            with open(final_path, 'wb') as outfile:
+                for i in range(total_chunks):
+                    chunk_file = os.path.join(file_dir, f'chunk_{i}')
+                    if os.path.exists(chunk_file):
+                        with open(chunk_file, 'rb') as infile:
+                            shutil.copyfileobj(infile, outfile)
+            
+            # 如果是压缩文件，解压
+            if is_compressed:
+                try:
+                    decompressed_path = os.path.join(temp_dir, filename)
+                    with gzip.open(final_path, 'rb') as f_in:
+                        with open(decompressed_path, 'wb') as f_out:
+                            shutil.copyfileobj(f_in, f_out)
+                    
+                    # 删除压缩文件
+                    os.remove(final_path)
+                    final_path = decompressed_path
+                except Exception as e:
+                    print(f"解压失败: {e}")
+                    # 解压失败，保留压缩文件
+                    pass
+            
+            # 检查文件夹大小限制
+            folder_size = get_folder_size(app.config['UPLOAD_FOLDER'])
+            new_file_size = os.path.getsize(final_path)
+            
+            if folder_size + new_file_size > MAX_UPLOAD_FOLDER_SIZE:
+                os.remove(final_path)
+                shutil.rmtree(file_dir)
+                return jsonify({
+                    'success': False,
+                    'message': f'文件夹大小超过限制 ({format_size(MAX_UPLOAD_FOLDER_SIZE)})'
+                }), 400
+            
+            # 移动文件到最终位置
+            final_destination = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            shutil.move(final_path, final_destination)
+            
+            # 清理临时文件
+            shutil.rmtree(file_dir)
+            
+            return jsonify({
+                'success': True,
+                'message': '文件上传完成',
+                'completed': True
+            })
+        
+        return jsonify({
+            'success': True,
+            'message': '块上传成功',
+            'uploaded_size': uploaded_size
+        })
+    
+    except Exception as e:
+        print(f"上传块错误: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 # 时间戳格式化过滤器
 @app.template_filter('datetimeformat')
 def datetimeformat(timestamp):
     return datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
 
-# 获取已上传文件列表（基于IP和日期过滤）
 def get_uploaded_files():
     uploaded_files = []
     client_ip = request.remote_addr
