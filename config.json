@@ -2,6 +2,7 @@
     "SECRET_KEY": "9ee8f23abaddf1f08e48db20d7608ecc",
     "PASSWORD": "123456",
     "UPLOAD_FOLDER": "uploads",
+    "UPLOAD_PATH": "",
     "ALLOWED_EXTENSIONS": [
         "txt",
         "pdf",

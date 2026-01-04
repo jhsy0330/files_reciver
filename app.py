@@ -3,7 +3,7 @@ import os
 import json
 import secrets
 from werkzeug.utils import secure_filename
-from datetime import datetime
+from datetime import datetime, date
 
 # 读取配置文件
 with open('config.json', 'r') as f:
@@ -27,10 +27,19 @@ app.config['MAX_CONTENT_LENGTH'] = config['MAX_CONTENT_LENGTH']
 # 设置其他配置变量
 PASSWORD = config['PASSWORD']
 ALLOWED_EXTENSIONS = set(config['ALLOWED_EXTENSIONS'])
+UPLOAD_PATH = config.get('UPLOAD_PATH', '')
+
+# 确定实际的上传目录
+if UPLOAD_PATH and os.path.isabs(UPLOAD_PATH):
+    # 如果UPLOAD_PATH是绝对路径，直接使用
+    ACTUAL_UPLOAD_FOLDER = UPLOAD_PATH
+else:
+    # 如果UPLOAD_PATH是相对路径或为空，使用UPLOAD_FOLDER
+    ACTUAL_UPLOAD_FOLDER = os.path.join(os.getcwd(), UPLOAD_PATH) if UPLOAD_PATH else os.path.join(os.getcwd(), config['UPLOAD_FOLDER'])
 
 # 确保上传目录存在
-if not os.path.exists(app.config['UPLOAD_FOLDER']):
-    os.makedirs(app.config['UPLOAD_FOLDER'])
+if not os.path.exists(ACTUAL_UPLOAD_FOLDER):
+    os.makedirs(ACTUAL_UPLOAD_FOLDER)
 
 # 检查文件类型是否允许
 def allowed_file(filename):
@@ -41,19 +50,30 @@ def allowed_file(filename):
 def datetimeformat(timestamp):
     return datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
 
-# 获取已上传文件列表
+# 获取已上传文件列表（基于IP和日期过滤）
 def get_uploaded_files():
     uploaded_files = []
-    if os.path.exists(UPLOAD_FOLDER):
-        for filename in os.listdir(UPLOAD_FOLDER):
-            filepath = os.path.join(UPLOAD_FOLDER, filename)
+    client_ip = request.remote_addr
+    today = date.today().strftime('%Y-%m-%d')
+    
+    if os.path.exists(ACTUAL_UPLOAD_FOLDER):
+        for filename in os.listdir(ACTUAL_UPLOAD_FOLDER):
+            filepath = os.path.join(ACTUAL_UPLOAD_FOLDER, filename)
             if os.path.isfile(filepath):
-                file_stats = os.stat(filepath)
-                uploaded_files.append({
-                    'name': filename,
-                    'size': file_stats.st_size,
-                    'time': file_stats.st_mtime  # 修改时间作为上传时间
-                })
+                # 检查文件名格式：IP_日期_原始文件名
+                parts = filename.split('_', 2)
+                if len(parts) >= 2:
+                    file_ip, file_date = parts[0], parts[1]
+                    # 只显示当前IP当天上传的文件
+                    if file_ip == client_ip and file_date == today:
+                        file_stats = os.stat(filepath)
+                        # 提取原始文件名
+                        original_name = parts[2] if len(parts) == 3 else filename
+                        uploaded_files.append({
+                            'name': original_name,
+                            'size': file_stats.st_size,
+                            'time': file_stats.st_mtime
+                        })
         # 按上传时间降序排序
         uploaded_files.sort(key=lambda x: x['time'], reverse=True)
     return uploaded_files
@@ -95,17 +115,23 @@ def upload():
                 continue
                 
             if allowed_file(file.filename):
-                filename = secure_filename(file.filename)
+                # 获取客户端IP和当前日期
+                client_ip = request.remote_addr
+                today = date.today().strftime('%Y-%m-%d')
+                
+                # 处理文件名：IP_日期_原始文件名
+                original_filename = secure_filename(file.filename)
+                filename = f"{client_ip}_{today}_{original_filename}"
                 
                 # 处理文件名冲突
                 base_name, ext = os.path.splitext(filename)
                 counter = 1
-                while os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], filename)):
+                while os.path.exists(os.path.join(ACTUAL_UPLOAD_FOLDER, filename)):
                     filename = f"{base_name}_{counter}{ext}"
                     counter += 1
                 
                 # 保存文件
-                file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+                file.save(os.path.join(ACTUAL_UPLOAD_FOLDER, filename))
                 success_count += 1
             else:
                 error_count += 1
