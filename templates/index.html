@@ -69,7 +69,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>向7suki发送文件</h1>
+        <h1>向{{ receiver_name }}发送文件</h1>
         {% with messages = get_flashed_messages() %}
           {% if messages %}
             {% for message in messages %}

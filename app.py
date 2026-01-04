@@ -28,6 +28,8 @@ app.config['MAX_CONTENT_LENGTH'] = config['MAX_CONTENT_LENGTH']
 PASSWORD = config['PASSWORD']
 ALLOWED_EXTENSIONS = set(config['ALLOWED_EXTENSIONS'])
 UPLOAD_PATH = config.get('UPLOAD_PATH', '')
+RECEIVER_NAME = config.get('RECEIVER_NAME', '文件接收系统')
+MAX_UPLOAD_FOLDER_SIZE = config.get('MAX_UPLOAD_FOLDER_SIZE', 107374182400)  # 默认100GB
 
 # 确定实际的上传目录
 if UPLOAD_PATH and os.path.isabs(UPLOAD_PATH):
@@ -44,6 +46,25 @@ if not os.path.exists(ACTUAL_UPLOAD_FOLDER):
 # 检查文件类型是否允许
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+# 计算文件夹大小
+def get_folder_size(folder_path):
+    total_size = 0
+    if os.path.exists(folder_path):
+        for dirpath, dirnames, filenames in os.walk(folder_path):
+            for filename in filenames:
+                filepath = os.path.join(dirpath, filename)
+                if os.path.isfile(filepath):
+                    total_size += os.path.getsize(filepath)
+    return total_size
+
+# 格式化文件大小
+def format_size(size_bytes):
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.2f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.2f} PB"
 
 # 时间戳格式化过滤器
 @app.template_filter('datetimeformat')
@@ -88,7 +109,7 @@ def index():
             return redirect(url_for('upload'))
         else:
             flash('密码错误！请重新输入。')
-    return render_template('index.html')
+    return render_template('index.html', receiver_name=RECEIVER_NAME)
 
 # 文件上传页面
 @app.route('/upload', methods=['GET', 'POST'])
@@ -106,6 +127,25 @@ def upload():
         
         # 获取所有上传的文件
         files = request.files.getlist('file')
+        
+        # 计算即将上传的文件总大小
+        upload_size = 0
+        for file in files:
+            if file.filename and hasattr(file, 'content_length'):
+                upload_size += file.content_length
+            elif file.filename:
+                # 如果无法获取content_length，跳过检查（这种情况很少见）
+                pass
+        
+        # 检查上传文件夹大小限制
+        current_folder_size = get_folder_size(ACTUAL_UPLOAD_FOLDER)
+        if current_folder_size + upload_size > MAX_UPLOAD_FOLDER_SIZE:
+            flash(f'上传失败！当前文件夹大小为 {format_size(current_folder_size)}，'
+                  f'即将上传 {format_size(upload_size)}，'
+                  f'总大小将超过限制 {format_size(MAX_UPLOAD_FOLDER_SIZE)}。'
+                  f'请联系管理员清理空间。')
+            return redirect(request.url)
+        
         success_count = 0
         error_count = 0
         
@@ -147,7 +187,7 @@ def upload():
     # 获取已上传文件列表
     uploaded_files = get_uploaded_files()
     
-    return render_template('upload.html', uploaded_files=uploaded_files)
+    return render_template('upload.html', uploaded_files=uploaded_files, receiver_name=RECEIVER_NAME)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)

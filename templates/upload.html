@@ -80,6 +80,97 @@
             background-color: #2196F3;
             color: white;
         }
+        /* 拖拽上传区域样式 */
+        .drop-zone {
+            border: 2px dashed #4CAF50;
+            border-radius: 8px;
+            padding: 40px 20px;
+            text-align: center;
+            background-color: #f9f9f9;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            margin-bottom: 15px;
+        }
+        .drop-zone:hover {
+            background-color: #f0f0f0;
+            border-color: #45a049;
+        }
+        .drop-zone.drag-over {
+            background-color: #e8f5e9;
+            border-color: #2e7d32;
+            transform: scale(1.02);
+        }
+        .drop-zone-icon {
+            font-size: 48px;
+            color: #4CAF50;
+            margin-bottom: 10px;
+        }
+        .drop-zone-text {
+            color: #666;
+            font-size: 16px;
+            margin-bottom: 5px;
+        }
+        .drop-zone-hint {
+            color: #999;
+            font-size: 14px;
+        }
+        /* 选中的文件预览 */
+        .selected-files {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border-radius: 4px;
+            display: none;
+        }
+        .selected-files.show {
+            display: block;
+        }
+        .selected-files-title {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        .selected-file-item {
+            display: flex;
+            align-items: center;
+            padding: 8px;
+            background-color: white;
+            border-radius: 4px;
+            margin-bottom: 5px;
+            border: 1px solid #eee;
+        }
+        .selected-file-icon {
+            font-size: 24px;
+            margin-right: 10px;
+            color: #4CAF50;
+        }
+        .selected-file-info {
+            flex-grow: 1;
+        }
+        .selected-file-name {
+            font-size: 14px;
+            color: #333;
+            margin-bottom: 2px;
+        }
+        .selected-file-size {
+            font-size: 12px;
+            color: #999;
+        }
+        .selected-file-remove {
+            color: #f44336;
+            cursor: pointer;
+            padding: 5px;
+            font-size: 18px;
+            transition: color 0.2s;
+        }
+        .selected-file-remove:hover {
+            color: #d32f2f;
+        }
+        /* 隐藏原始文件输入框 */
+        #file {
+            display: none;
+        }
         /* 进度条样式 */
         .progress-container {
             width: 100%;
@@ -152,7 +243,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>上传文件</h1>
+        <h1>向{{ receiver_name }}发送文件</h1>
         {% with messages = get_flashed_messages() %} 
           {% if messages %} 
             {% for message in messages %} 
@@ -167,10 +258,22 @@
           {% endif %} 
         {% endwith %} 
         <form id="uploadForm" method="post" enctype="multipart/form-data">
-            <div class="form-group">
-                <label for="file">选择文件（可多选）：</label>
-                <input type="file" id="file" name="file" required multiple> <!-- 添加multiple属性支持多文件选择 -->
+            <!-- 拖拽上传区域 -->
+            <div class="drop-zone" id="dropZone">
+                <div class="drop-zone-icon">📁</div>
+                <div class="drop-zone-text">拖拽文件到此处上传</div>
+                <div class="drop-zone-hint">或点击选择文件（支持多文件）</div>
             </div>
+            
+            <!-- 隐藏的文件输入框 -->
+            <input type="file" id="file" name="file" required multiple>
+            
+            <!-- 选中的文件预览 -->
+            <div class="selected-files" id="selectedFiles">
+                <div class="selected-files-title">已选择 <span id="fileCount">0</span> 个文件</div>
+                <div id="selectedFileList"></div>
+            </div>
+            
             <!-- 进度条 -->
             <div class="progress-container" id="progressContainer">
                 <div class="progress-bar" id="progressBar">0%</div>
@@ -203,17 +306,108 @@
     </div>
 
     <script>
-        document.getElementById('uploadForm').addEventListener('submit', function(e) {
-            e.preventDefault(); // 阻止表单默认提交
-            
-            const fileInput = document.getElementById('file');
+        // 存储选中的文件
+        let selectedFiles = [];
+        
+        // 获取DOM元素
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('file');
+        const selectedFilesDiv = document.getElementById('selectedFiles');
+        const selectedFileList = document.getElementById('selectedFileList');
+        const fileCount = document.getElementById('fileCount');
+        
+        // 点击拖拽区域触发文件选择
+        dropZone.addEventListener('click', function() {
+            fileInput.click();
+        });
+        
+        // 文件选择变化时更新预览
+        fileInput.addEventListener('change', function() {
             const files = Array.from(fileInput.files);
+            addFiles(files);
+            fileInput.value = ''; // 清空input，允许重复选择相同文件
+        });
+        
+        // 拖拽事件处理
+        dropZone.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.add('drag-over');
+        });
+        
+        dropZone.addEventListener('dragleave', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.remove('drag-over');
+        });
+        
+        dropZone.addEventListener('drop', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.remove('drag-over');
+            
+            const files = Array.from(e.dataTransfer.files);
+            if (files.length > 0) {
+                addFiles(files);
+            }
+        });
+        
+        // 添加文件到列表
+        function addFiles(files) {
+            files.forEach(file => {
+                // 检查是否已存在相同文件
+                const exists = selectedFiles.some(f => 
+                    f.name === file.name && f.size === file.size && f.type === file.type
+                );
+                if (!exists) {
+                    selectedFiles.push(file);
+                }
+            });
+            updateFilePreview();
+        }
+        
+        // 更新文件预览
+        function updateFilePreview() {
+            selectedFileList.innerHTML = '';
+            fileCount.textContent = selectedFiles.length;
+            
+            if (selectedFiles.length > 0) {
+                selectedFilesDiv.classList.add('show');
+                
+                selectedFiles.forEach((file, index) => {
+                    const fileItem = document.createElement('div');
+                    fileItem.className = 'selected-file-item';
+                    fileItem.innerHTML = `
+                        <div class="selected-file-icon">📄</div>
+                        <div class="selected-file-info">
+                            <div class="selected-file-name">${file.name}</div>
+                            <div class="selected-file-size">${formatBytes(file.size)}</div>
+                        </div>
+                        <div class="selected-file-remove" onclick="removeFile(${index})">×</div>
+                    `;
+                    selectedFileList.appendChild(fileItem);
+                });
+            } else {
+                selectedFilesDiv.classList.remove('show');
+            }
+        }
+        
+        // 移除文件
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            updateFilePreview();
+        }
+        
+        // 表单提交处理
+        document.getElementById('uploadForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
             const uploadBtn = document.getElementById('uploadBtn');
             const progressContainer = document.getElementById('progressContainer');
             const progressBar = document.getElementById('progressBar');
             const progressText = document.getElementById('progressText');
             
-            if (files.length === 0) {
+            if (selectedFiles.length === 0) {
                 alert('请选择至少一个文件');
                 return;
             }
@@ -225,7 +419,7 @@
             
             // 创建FormData对象
             const formData = new FormData();
-            files.forEach(file => {
+            selectedFiles.forEach(file => {
                 formData.append('file', file);
             });
             

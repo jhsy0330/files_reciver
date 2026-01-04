@@ -3,6 +3,8 @@
     "PASSWORD": "123456",
     "UPLOAD_FOLDER": "uploads",
     "UPLOAD_PATH": "",
+    "RECEIVER_NAME": "文件接收系统",
+    "MAX_UPLOAD_FOLDER_SIZE": 107374182400,
     "ALLOWED_EXTENSIONS": [
         "txt",
         "pdf",
