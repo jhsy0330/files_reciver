@@ -268,7 +268,7 @@
             </div>
             
             <!-- 隐藏的文件输入框 -->
-            <input type="file" id="file" name="file" required multiple>
+            <input type="file" id="file" name="file" multiple>
             
             <!-- 选中的文件预览 -->
             <div class="selected-files" id="selectedFiles">
@@ -423,45 +423,6 @@
             updateFilePreview();
         }
         
-        // 表单提交处理
-        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
-            if (selectedFiles.length === 0) {
-                alert('请选择至少一个文件');
-                return;
-            }
-            
-            // 暂时只支持单文件断点续传
-            if (selectedFiles.length > 1) {
-                alert('断点续传功能当前仅支持单文件上传，请选择一个文件');
-                return;
-            }
-            
-            const file = selectedFiles[0];
-            const fileId = generateFileId(file);
-            
-            // 检查是否已有部分上传
-            const uploadedBytes = await checkUploadStatus(fileId);
-            
-            if (uploadedBytes > 0) {
-                const confirmResume = confirm(`检测到该文件已上传 ${formatBytes(uploadedBytes)}，是否继续上传？`);
-                if (confirmResume) {
-                    currentUpload = { file, fileId };
-                    await resumeUpload();
-                    return;
-                }
-            }
-            
-            // 开始新的上传
-            currentUpload = { file, fileId };
-            uploadBtn.disabled = true;
-            uploadBtn.textContent = '上传中...';
-            cancelBtn.style.display = 'inline-block';
-            
-            await uploadFileInChunks(file, fileId, 0);
-        });
-        
         // 格式化字节数
         function formatBytes(bytes) {
             if (bytes === 0) return '0 Bytes';
@@ -549,14 +510,17 @@
         }
 
         // 上传文件块
-        async function uploadChunk(file, fileId, chunk, chunkIndex, totalChunks, onProgress, isCompressed) {
+        async function uploadChunk(originalFile, compressedFile, fileId, chunk, chunkIndex, totalChunks, onProgress, isCompressed) {
+            // 根据是否压缩选择正确的文件大小
+            const fileToUse = isCompressed ? compressedFile : originalFile;
+            
             const formData = new FormData();
             formData.append('file_id', fileId);
             formData.append('chunk', chunk);
             formData.append('chunk_index', chunkIndex);
             formData.append('total_chunks', totalChunks);
-            formData.append('filename', file.name);
-            formData.append('filesize', file.size);
+            formData.append('filename', originalFile.name);
+            formData.append('filesize', originalFile.size);
             formData.append('is_compressed', isCompressed);
             
             const response = await fetch('/upload/chunk', {
@@ -570,7 +534,8 @@
             
             const data = await response.json();
             if (data.success) {
-                onProgress((chunkIndex + 1) * chunk.size, file.size);
+                // 传递当前块的大小给进度回调,使用正确的文件总大小
+                onProgress(chunk.size, fileToUse.size);
             } else {
                 throw new Error(data.message || '上传块失败');
             }
@@ -645,28 +610,74 @@
             }
         }
 
+        // 加载已上传的文件列表
+        async function loadUploadedFiles() {
+            try {
+                // 重新加载页面以刷新文件列表
+                window.location.reload();
+            } catch (error) {
+                console.error('加载文件列表失败:', error);
+            }
+        }
+        
         // 分块上传文件
-        async function uploadFileInChunks(file, fileId, onProgress) {
+        async function uploadFileInChunks(file, fileId, startChunkIndex = 0) {
+            console.log('uploadFileInChunks 被调用', { file: file.name, fileId, startChunkIndex });
+            
             const shouldCompress = document.getElementById('compressCheckbox').checked;
             let fileToUpload = file;
             
-            // 如果需要压缩，先压缩文件
+            // 显示进度条
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+            progressContainer.style.display = 'block';
+            
+            // 如果需要压缩,先压缩文件
             if (shouldCompress) {
                 try {
                     updateProgressText('正在压缩文件...');
                     fileToUpload = await compressFile(file);
                     const compressionRatio = ((1 - fileToUpload.size / file.size) * 100).toFixed(1);
-                    updateProgressText(`压缩完成，节省了 ${compressionRatio}% 的空间`);
+                    updateProgressText(`压缩完成,节省了 ${compressionRatio}% 的空间`);
                 } catch (error) {
                     console.error('压缩失败:', error);
-                    alert('文件压缩失败，将使用原始文件上传');
+                    alert('文件压缩失败,将使用原始文件上传');
                     fileToUpload = file;
                 }
             }
             
             const totalChunks = Math.ceil(fileToUpload.size / CHUNK_SIZE);
+            const startTime = Date.now();
+            let uploadedBytes = startChunkIndex * CHUNK_SIZE;
             
-            for (let i = 0; i < totalChunks; i++) {
+            console.log('分块信息', { totalChunks, startChunkIndex, fileToUploadSize: fileToUpload.size });
+            
+            // 进度回调函数
+            const onProgress = (chunkUploadedBytes, totalBytes) => {
+                uploadedBytes += chunkUploadedBytes;
+                const progress = Math.min((uploadedBytes / totalBytes) * 100, 100);
+                progressBar.style.width = progress + '%';
+                progressBar.textContent = progress.toFixed(1) + '%';
+                
+                // 计算上传速度
+                const elapsedSeconds = (Date.now() - startTime) / 1000;
+                if (elapsedSeconds > 0) {
+                    const speed = uploadedBytes / elapsedSeconds;
+                    const remainingBytes = totalBytes - uploadedBytes;
+                    const remainingSeconds = remainingBytes / speed;
+                    
+                    updateProgressText(
+                        `已上传: ${formatBytes(uploadedBytes)} / ${formatBytes(totalBytes)} ` +
+                        `(${progress.toFixed(1)}%) | ` +
+                        `速度: ${formatBytes(speed)}/s | ` +
+                        `剩余: ${formatTime(remainingSeconds)}`
+                    );
+                }
+            };
+            
+            for (let i = startChunkIndex; i < totalChunks; i++) {
+                console.log(`正在上传块 ${i + 1}/${totalChunks}`);
+                
                 if (isCancelled) {
                     throw new Error('上传已取消');
                 }
@@ -682,9 +693,77 @@
                 const end = Math.min(start + CHUNK_SIZE, fileToUpload.size);
                 const chunk = fileToUpload.slice(start, end);
                 
-                await uploadChunk(file, fileId, chunk, i, totalChunks, onProgress, shouldCompress);
+                console.log(`上传块 ${i}, 大小: ${chunk.size} 字节`);
+                
+                // 传递压缩后的文件大小用于进度计算
+                await uploadChunk(file, fileToUpload, fileId, chunk, i, totalChunks, onProgress, shouldCompress);
+                
+                console.log(`块 ${i} 上传完成`);
             }
+            
+            // 上传完成
+            updateProgressText('上传完成!');
+            console.log('所有块上传完成');
+            setTimeout(() => {
+                loadUploadedFiles();
+                resetUploadUI();
+                selectedFiles = [];
+                updateFilePreview();
+            }, 1000);
         }
+        
+        // 表单提交处理
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            console.log('表单提交被触发');
+            console.log('selectedFiles:', selectedFiles);
+            
+            if (selectedFiles.length === 0) {
+                alert('请选择至少一个文件');
+                return;
+            }
+            
+            // 暂时只支持单文件断点续传
+            if (selectedFiles.length > 1) {
+                alert('断点续传功能当前仅支持单文件上传，请选择一个文件');
+                return;
+            }
+            
+            const file = selectedFiles[0];
+            const fileId = generateFileId(file);
+            
+            console.log('准备上传文件:', file.name, 'fileId:', fileId);
+            
+            // 检查是否已有部分上传
+            const uploadedBytes = await checkUploadStatus(fileId);
+            
+            console.log('已上传字节数:', uploadedBytes);
+            
+            if (uploadedBytes > 0) {
+                const confirmResume = confirm(`检测到该文件已上传 ${formatBytes(uploadedBytes)}，是否继续上传？`);
+                if (confirmResume) {
+                    currentUpload = { file, fileId };
+                    await resumeUpload();
+                    return;
+                }
+            }
+            
+            // 开始新的上传
+            console.log('开始新的上传');
+            currentUpload = { file, fileId };
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = '上传中...';
+            cancelBtn.style.display = 'inline-block';
+            
+            try {
+                await uploadFileInChunks(file, fileId, 0);
+            } catch (error) {
+                console.error('上传失败:', error);
+                alert('上传失败: ' + error.message);
+                resetUploadUI();
+            }
+        });
         
         // 绑定按钮事件
         resumeBtn.addEventListener('click', resumeUpload);

@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, send_from_directory, session, redirect, flash
+from flask import Flask, render_template, request, jsonify, send_from_directory, session, redirect, flash, url_for
 import os
 import datetime
 import hashlib
@@ -94,10 +94,19 @@ def check_upload_status():
     if not file_id:
         return jsonify({'error': '缺少file_id参数'}), 400
     
-    temp_file_path = os.path.join(TEMP_UPLOAD_FOLDER, file_id)
-    if os.path.exists(temp_file_path):
-        uploaded_size = os.path.getsize(temp_file_path)
-        return jsonify({'uploaded_size': uploaded_size})
+    # 使用与upload_chunk相同的临时目录路径
+    temp_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'temp')
+    file_dir = os.path.join(temp_dir, file_id)
+    status_file = os.path.join(file_dir, 'status.json')
+    
+    if os.path.exists(status_file):
+        try:
+            with open(status_file, 'r') as f:
+                status = json.load(f)
+                return jsonify({'uploaded_size': status.get('uploaded_size', 0)})
+        except Exception as e:
+            print(f"读取上传状态失败: {e}")
+            return jsonify({'uploaded_size': 0})
     else:
         return jsonify({'uploaded_size': 0})
 
@@ -197,8 +206,22 @@ def upload_chunk():
                     'message': f'文件夹大小超过限制 ({format_size(MAX_UPLOAD_FOLDER_SIZE)})'
                 }), 400
             
+            # 获取客户端IP和当前日期，按照格式重命名文件：IP_日期_原始文件名
+            client_ip = request.remote_addr
+            today = date.today().strftime('%Y-%m-%d')
+            original_filename = secure_filename(filename)
+            final_filename = f"{client_ip}_{today}_{original_filename}"
+            
+            # 处理文件名冲突
+            base_name, ext = os.path.splitext(final_filename)
+            counter = 1
+            final_destination = os.path.join(app.config['UPLOAD_FOLDER'], final_filename)
+            while os.path.exists(final_destination):
+                final_filename = f"{base_name}_{counter}{ext}"
+                final_destination = os.path.join(app.config['UPLOAD_FOLDER'], final_filename)
+                counter += 1
+            
             # 移动文件到最终位置
-            final_destination = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             shutil.move(final_path, final_destination)
             
             # 清理临时文件
